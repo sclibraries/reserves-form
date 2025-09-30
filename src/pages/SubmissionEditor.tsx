@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/StatusBadge";
-import { ItemDrawer, ItemData } from "@/components/ItemDrawer";
+import { ItemModal, ItemData } from "@/components/ItemModal";
 import { ArrowLeft, Plus, GripVertical, Edit2, FileText, Link, Calendar } from "lucide-react";
 import {
   AlertDialog,
@@ -23,19 +23,19 @@ const SubmissionEditor = () => {
   const navigate = useNavigate();
   const { id } = useParams();
   const [items, setItems] = useState<(ItemData & { id: string })[]>([]);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<(ItemData & { id: string }) | undefined>();
   const [showSubmitDialog, setShowSubmitDialog] = useState(false);
   const [emailConfirmation, setEmailConfirmation] = useState(false);
 
   const handleAddItem = () => {
     setEditingItem(undefined);
-    setDrawerOpen(true);
+    setModalOpen(true);
   };
 
   const handleEditItem = (item: ItemData & { id: string }) => {
     setEditingItem(item);
-    setDrawerOpen(true);
+    setModalOpen(true);
   };
 
   const handleSaveItem = (itemData: ItemData) => {
@@ -190,10 +190,10 @@ const SubmissionEditor = () => {
         </div>
       </main>
 
-      {/* Item Drawer */}
-      <ItemDrawer
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
+      {/* Item Modal */}
+      <ItemModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
         onSave={handleSaveItem}
         initialData={editingItem}
       />

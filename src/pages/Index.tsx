@@ -97,7 +97,7 @@ const Index = () => {
               <Plus className="mr-2 h-4 w-4" />
               New Submission
             </Button>
-            <Button variant="outline">
+            <Button variant="outline" onClick={() => navigate("/clone-previous")}>
               <Copy className="mr-2 h-4 w-4" />
               Clone from Previous
             </Button>
