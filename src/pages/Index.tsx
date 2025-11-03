@@ -1,57 +1,69 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { SubmissionCard, Submission } from "@/components/SubmissionCard";
+import { CourseModal, CourseData } from "@/components/CourseModal";
+import { TermsDebugPanel } from "@/components/TermsDebugPanel";
+import { AuthDebugPanel } from "@/components/AuthDebugPanel";
+import DebugOnly from "@/components/DebugOnly";
 import { useNavigate } from "react-router-dom";
-import { Plus, Copy, Search, BookOpen } from "lucide-react";
-
-// Mock data
-const mockSubmissions: Submission[] = [
-  {
-    id: "1",
-    courseCode: "CSC 201",
-    courseTitle: "Data Structures",
-    term: "Spring 2026",
-    status: "draft",
-    totalItems: 7,
-    completeItems: 3,
-    inProgressItems: 2,
-    needsReviewItems: 2,
-    lastUpdated: "Aug 12, 2026",
-  },
-  {
-    id: "2",
-    courseCode: "MAT 301",
-    courseTitle: "Linear Algebra",
-    term: "Spring 2026",
-    status: "submitted",
-    totalItems: 5,
-    completeItems: 2,
-    inProgressItems: 3,
-    needsReviewItems: 0,
-    lastUpdated: "Aug 10, 2026",
-  },
-  {
-    id: "3",
-    courseCode: "ENG 101",
-    courseTitle: "Composition I",
-    term: "Fall 2025",
-    status: "complete",
-    totalItems: 12,
-    completeItems: 12,
-    inProgressItems: 0,
-    needsReviewItems: 0,
-    lastUpdated: "Dec 15, 2025",
-  },
-];
+import { Plus, Copy, Search, BookOpen, Settings } from "lucide-react";
+import { useCourseReservesStore } from "../store/courseReservesStore";
+import { useTermsStore } from "../store/termsStore";
+import { useAuthStore } from "../store/authStore";
 
 const Index = () => {
   const navigate = useNavigate();
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [courseModalOpen, setCourseModalOpen] = useState(false);
+  
+  // Use Zustand stores
+  const { reserves, addReserve, deleteReserve, getReserveStats, initialize, fetchSubmissions, startPolling, stopPolling, loading: reservesLoading } = useCourseReservesStore();
+  const { 
+    getCurrentTermName, 
+    getNextTermName, 
+    fetchTerms, 
+    refreshTermsIfStale, 
+    loading: termsLoading,
+    error: termsError 
+  } = useTermsStore();
+  const { user, isAuthenticated, initializeFromCookie } = useAuthStore();
 
-  const statuses = ["Draft", "Submitted", "In Review", "Partially Complete", "Complete", "Canceled"];
+  // Debug terms loading
+  useEffect(() => {
+    console.log('Terms loading:', termsLoading);
+    console.log('Terms error:', termsError);
+    console.log('Current term name:', getCurrentTermName());
+    console.log('Next term name:', getNextTermName());
+  }, [termsLoading, termsError, getCurrentTermName, getNextTermName]);
+
+  // Initialize stores on first load
+  useEffect(() => {
+    initialize();
+    refreshTermsIfStale();
+    initializeFromCookie();
+  }, [initialize, refreshTermsIfStale, initializeFromCookie]);
+
+  // Fetch submissions from backend when authenticated and start polling
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      console.log('🔐 User authenticated, fetching submissions...');
+      fetchSubmissions();
+      
+      // Start polling for real-time updates (every 30 seconds)
+      startPolling(30000);
+      
+      // Cleanup: stop polling when component unmounts or user logs out
+      return () => {
+        stopPolling();
+      };
+    }
+  }, [isAuthenticated, user, fetchSubmissions, startPolling, stopPolling]);
+
+  const statuses = ["Draft", "Partially Complete", "Submitted", "Complete"];
 
   const toggleStatus = (status: string) => {
     setSelectedStatuses((prev) =>
@@ -59,10 +71,63 @@ const Index = () => {
     );
   };
 
-  const filteredSubmissions = mockSubmissions.filter((sub) => {
+  const handleCreateCourse = (courseData: CourseData) => {
+    const reserveId = addReserve({
+      courseCode: courseData.courseCode,
+      courseTitle: courseData.courseTitle,
+      section: courseData.section,
+      instructors: courseData.instructors,
+      term: courseData.term,
+      status: "draft",
+      items: [],
+      folders: [] // Add folders property as required by CourseReserve
+    });
+    
+    // Navigate to the editor for the new course
+    navigate(`/submission/${reserveId}/edit`);
+  };
+
+  const handleDeleteCourse = (reserveId: string) => {
+    deleteReserve(reserveId);
+  };
+
+  // Convert CourseReserve to Submission format for display
+  const submissions: Submission[] = reserves.map((reserve) => {
+    const stats = getReserveStats(reserve.id);
+    
+    // Map store status to submission status
+    const statusMapping = {
+      'draft': 'draft' as const,
+      'in-progress': 'partial' as const,
+      'submitted': 'submitted' as const,
+      'complete': 'complete' as const
+    };
+    
+    return {
+      id: reserve.id,
+      courseCode: reserve.courseCode,
+      courseTitle: reserve.courseTitle,
+      term: reserve.term,
+      status: statusMapping[reserve.status],
+      totalItems: stats.totalItems,
+      completeItems: stats.completeItems,
+      inProgressItems: stats.inProgressItems,
+      needsReviewItems: stats.needsReviewItems,
+      lastUpdated: reserve.lastUpdated,
+    };
+  });
+
+  const filteredSubmissions = submissions.filter((sub) => {
+    const statusFilterMapping = {
+      'Draft': 'draft',
+      'Partially Complete': 'partial', 
+      'Submitted': 'submitted',
+      'Complete': 'complete'
+    };
+    
     const matchesStatus =
       selectedStatuses.length === 0 ||
-      selectedStatuses.some((s) => s.toLowerCase().replace(" ", "-") === sub.status);
+      selectedStatuses.some((s) => statusFilterMapping[s as keyof typeof statusFilterMapping] === sub.status);
     const matchesSearch =
       searchQuery === "" ||
       sub.courseCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -79,9 +144,14 @@ const Index = () => {
             <div className="flex items-center gap-3">
               <BookOpen className="h-6 w-6 text-primary" />
               <h1 className="text-xl font-semibold">Course Reserves</h1>
+              {isAuthenticated && user && (
+                <Badge variant="outline" className="text-xs">
+                  {user.full_name}
+                </Badge>
+              )}
             </div>
             <Badge variant="secondary" className="text-sm">
-              Spring 2026
+              {getNextTermName()}
             </Badge>
           </div>
         </div>
@@ -89,17 +159,46 @@ const Index = () => {
 
       {/* Main Content */}
       <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Debug Panels - hidden in production builds by default */}
+        <DebugOnly>
+        <div className="space-y-4 mb-6">
+          <AuthDebugPanel />
+          {/* <TermsDebugPanel /> */}
+          
+          {/* Clone Matching Test Link */}
+          <Card className="bg-amber-50 border-amber-200">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-amber-900 mb-1">🧪 Clone Matching Test</h3>
+                  <p className="text-sm text-amber-700">
+                    Test the course matching algorithm for cloning materials from previous terms
+                  </p>
+                </div>
+                <Button 
+                  variant="outline" 
+                  onClick={() => navigate("/clone-matching-test")}
+                  className="border-amber-300 hover:bg-amber-100"
+                >
+                  Open Test Interface
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+  </div>
+  </DebugOnly>
+        
         {/* Header Section */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-          <h2 className="text-3xl font-bold">My Submissions</h2>
+          <h2 className="text-3xl font-bold">My Course Reserves</h2>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => navigate("/new-submission")}>
-              <Plus className="mr-2 h-4 w-4" />
-              New Submission
-            </Button>
+                              <Button onClick={() => setCourseModalOpen(true)} className="gap-2">
+          <Plus className="h-4 w-4" />
+          Create New Course
+        </Button>
             <Button variant="outline" onClick={() => navigate("/clone-previous")}>
               <Copy className="mr-2 h-4 w-4" />
-              Clone from Previous
+              Copy from Previous Term
             </Button>
           </div>
         </div>
@@ -134,23 +233,39 @@ const Index = () => {
         {filteredSubmissions.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredSubmissions.map((submission) => (
-              <SubmissionCard key={submission.id} submission={submission} />
+              <SubmissionCard 
+                key={submission.id} 
+                submission={submission} 
+                onDelete={submission.status === 'draft' ? handleDeleteCourse : undefined}
+              />
             ))}
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <BookOpen className="h-16 w-16 text-muted-foreground mb-4" />
-            <h3 className="text-xl font-semibold mb-2">No submissions yet for this term</h3>
+            <h3 className="text-xl font-semibold mb-2">No courses yet for {getNextTermName()}</h3>
             <p className="text-muted-foreground mb-6">
-              Get started by creating your first course reserve submission
+              Create your first course and add reading materials for the library to process
             </p>
-            <Button size="lg" onClick={() => navigate("/new-submission")}>
-              <Plus className="mr-2 h-5 w-5" />
-              Start a Submission
-            </Button>
+            <div className="flex gap-3">
+              <Button size="lg" onClick={() => setCourseModalOpen(true)}>
+                <Plus className="mr-2 h-5 w-5" />
+                Create New Course
+              </Button>
+              <Button size="lg" variant="outline" onClick={() => navigate("/clone-previous")}>
+                <Copy className="mr-2 h-5 w-5" />
+                Copy from Previous Term
+              </Button>
+            </div>
           </div>
         )}
       </main>
+      
+      <CourseModal
+        open={courseModalOpen}
+        onOpenChange={setCourseModalOpen}
+        onSave={handleCreateCourse}
+      />
     </div>
   );
 };

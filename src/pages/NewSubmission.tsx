@@ -62,7 +62,7 @@ const NewSubmission = () => {
             <Button variant="ghost" onClick={() => navigate("/")} className="mr-4">
               <ArrowLeft className="h-4 w-4" />
             </Button>
-            <h1 className="text-xl font-semibold">New Submission</h1>
+            <h1 className="text-xl font-semibold">Create New Course Reserve</h1>
           </div>
         </div>
       </header>
@@ -85,9 +85,9 @@ const NewSubmission = () => {
         {step === 1 ? (
           <Card>
             <CardHeader>
-              <CardTitle>Course Details</CardTitle>
+              <CardTitle>Course Information</CardTitle>
               <CardDescription>
-                Enter the basic information for your course reserve submission
+                Enter your course details to get started with reserve materials
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -185,7 +185,7 @@ const NewSubmission = () => {
                 )}
                 <div>
                   <p className="text-sm text-muted-foreground">Term</p>
-                  <Badge variant="secondary">Spring 2026</Badge>
+                  <Badge variant="secondary">Fall 2025</Badge>
                 </div>
               </div>
             </CardContent>

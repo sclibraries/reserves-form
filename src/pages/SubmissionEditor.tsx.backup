@@ -1,0 +1,1842 @@
+import { useState, useMemo, useEffect, useRef } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/StatusBadge";
+import { ItemModal, ItemData } from "@/components/ItemModal";
+import { SortableItem } from "@/components/SortableItem";
+import { SortableFolder } from "@/components/SortableFolder";
+import { CourseModal, CourseData } from "@/components/CourseModal";
+import { ItemSortingToolbar, type SortOption, type FilterOption } from "@/components/ItemSortingToolbar";
+import { ArrowLeft, Plus, GripVertical, Edit2, FileText, Link, BookOpen, Copy, AlertCircle, CheckCircle2, ExternalLink, User, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { toast } from "sonner";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useCourseReservesStore } from "../store/courseReservesStore";
+import { useAuthStore } from "../store/authStore";
+import { useCourseSearchStore } from "../store/courseSearchStore";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import {
+  restrictToVerticalAxis,
+  restrictToParentElement,
+} from '@dnd-kit/modifiers';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useCourseCloning, type PreviewResource, type PhysicalReserve, type ElectronicResource, type PreviousCourse } from "@/hooks/useCourseCloning";
+import { API_ENDPOINTS } from "@/config/endpoints";
+
+const SubmissionEditor = () => {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<(ItemData & { id: string }) | undefined>();
+  const [showSubmitDialog, setShowSubmitDialog] = useState(false);
+  const [emailConfirmation, setEmailConfirmation] = useState(false);
+  const [courseModalOpen, setCourseModalOpen] = useState(false);
+  const [showCreateFolderButton, setShowCreateFolderButton] = useState(false);
+  const [showCloneSuggestion, setShowCloneSuggestion] = useState(false);
+  const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
+  const [hasExactMatchCourses, setHasExactMatchCourses] = useState(false);
+  const [checkingForPreviousCourses, setCheckingForPreviousCourses] = useState(false);
+  const [viewMode, setViewMode] = useState<'exact' | 'all'>('exact'); // Toggle between exact matches and all courses
+  const [dialogView, setDialogView] = useState<'courses' | 'resources'>('courses'); // What to show in the dialog
+  const [previewCourse, setPreviewCourse] = useState<PreviousCourse | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [previewResources, setPreviewResources] = useState<PreviewResource[]>([]);
+  const [showInstructions, setShowInstructions] = useState(false);
+  
+  // Custom hooks
+  const { 
+    loadingPreviousCourses,
+    previousCourses,
+    cloningFromCourse,
+    setCloningFromCourse,
+    fetchPreviousCourses,
+    fetchCourseResources
+  } = useCourseCloning();
+  
+  // Track if we've already checked for this course to prevent infinite loop
+  const hasCheckedForPreviousCourses = useRef(false);
+  
+  // Reset the check flag when course ID changes
+  useEffect(() => {
+    hasCheckedForPreviousCourses.current = false;
+  }, [id]);
+  
+  // Sorting and filtering state
+  const [sortBy, setSortBy] = useState<SortOption>('position');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filters, setFilters] = useState<FilterOption>({
+    materialTypes: [],
+    statuses: []
+  });
+  
+  const { 
+    getReserveById, 
+    addItem, 
+    updateItem, 
+    deleteItem, 
+    reorderItems, 
+    moveItemToPosition, 
+    updateReserve,
+    createFolder,
+    updateFolder,
+    deleteFolder,
+    toggleFolder,
+    addItemToFolder,
+    removeItemFromFolder,
+    moveItemInFolder,
+    moveFolderPosition,
+    reserves,
+    cloneReserve,
+    getReserveStats
+  } = useCourseReservesStore();
+  const reserve = getReserveById(id!);
+  const { user } = useAuthStore();
+  const { courses: externalCourses, searchCoursesByInstructor } = useCourseSearchStore();
+  
+  // Check for previous versions of this course on page load
+  useEffect(() => {
+    const checkForPreviousCourses = async () => {
+      if (!reserve || !user?.full_name) return;
+      
+      // Only check once per course load
+      if (hasCheckedForPreviousCourses.current) return;
+      
+      // Mark as checked to prevent re-running
+      hasCheckedForPreviousCourses.current = true;
+      setCheckingForPreviousCourses(true);
+      
+      try {
+        // Build query using API_ENDPOINTS
+        const query = `(courseNumber=="${reserve.courseCode}" and department.name=="SC*" and courseListing.instructorObjects="${user.full_name}*") sortby courseListing.termObject.name/sort.descending`;
+        const searchUrl = `${API_ENDPOINTS.FOLIO.BASE_URL}${API_ENDPOINTS.FOLIO.SEARCH_COURSES}?query=${encodeURIComponent(query)}`;
+        
+        const coursesRes = await fetch(searchUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+          mode: 'cors',
+          credentials: 'omit'
+        });
+        
+        if (coursesRes.ok) {
+          const coursesData = await coursesRes.json();
+          const courses = coursesData.data?.courses || [];
+          
+          // Check if we found any previous versions of this exact course
+          if (courses.length > 0) {
+            setHasExactMatchCourses(true);
+            setShowCloneSuggestion(true);
+          } else {
+            setHasExactMatchCourses(false);
+            setShowCloneSuggestion(true); // Still show, but with "see all" option
+          }
+        }
+      } catch (error) {
+        console.error('Failed to check for previous courses:', error);
+        // Still show the banner, but without knowing if exact matches exist
+        setShowCloneSuggestion(true);
+      } finally {
+        setCheckingForPreviousCourses(false);
+      }
+    };
+    
+    checkForPreviousCourses();
+  }, [id, reserve?.courseCode, reserve?.items.length, reserve?.folders.length, user?.full_name, reserve, user]);
+  
+  // Drag and drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+  
+  // Get organized content (folders and ungrouped items)
+  const organizedContent = useMemo(() => {
+    if (!reserve) return { folders: [], ungroupedItems: [], mixedContent: [] };
+    
+    // Ensure folders array exists (for backwards compatibility)
+    const folders = reserve.folders || [];
+    const items = reserve.items || [];
+    
+    // Get items that belong to folders and populate folder items
+    const foldersWithItems = folders.map(folder => ({
+      ...folder,
+      items: items.filter(item => item.folderId === folder.id)
+    }));
+    
+    // Get items that don't belong to any folder
+    const ungroupedItems = items.filter(item => !item.folderId);
+    
+    // Create mixed content array for unified ordering
+    const mixedContent: Array<{ type: 'folder' | 'item', folder?: typeof foldersWithItems[0], item?: typeof ungroupedItems[0], position: number }> = [
+      // Add folders with their positions (use high numbers to put them after items by default)
+      ...foldersWithItems.map((folder, index) => ({
+        type: 'folder' as const,
+        folder,
+        position: folder.position ?? (1000 + index) // Default to end if no position set
+      })),
+      // Add ungrouped items with their array index as position  
+      ...ungroupedItems.map((item, index) => ({
+        type: 'item' as const,
+        item,
+        position: index
+      }))
+    ];
+    
+    // Sort mixed content by position
+    mixedContent.sort((a, b) => a.position - b.position);
+    
+    return {
+      folders: foldersWithItems,
+      ungroupedItems,
+      mixedContent
+    };
+  }, [reserve]);
+
+  // Filter and sort the organized content
+  const filteredAndSortedContent = useMemo(() => {
+    if (!reserve) return { folders: [], ungroupedItems: [], mixedContent: [] };
+    
+    let { folders, ungroupedItems } = organizedContent;
+
+    // Apply search and filters to ungrouped items
+    if (searchQuery || filters.materialTypes.length > 0 || filters.statuses.length > 0) {
+      ungroupedItems = ungroupedItems.filter(item => {
+        const matchesSearch = !searchQuery || 
+          item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          item.authors?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          item.materialType.toLowerCase().includes(searchQuery.toLowerCase());
+        
+        const matchesMaterialType = filters.materialTypes.length === 0 || 
+          filters.materialTypes.includes(item.materialType);
+        
+        const matchesStatus = filters.statuses.length === 0 || 
+          filters.statuses.includes(item.status);
+        
+        return matchesSearch && matchesMaterialType && matchesStatus;
+      });
+
+      // Filter folders (show folder if it contains matching items or matches search itself)
+      folders = folders.map(folder => ({
+        ...folder,
+        items: folder.items.filter(item => {
+          const matchesSearch = !searchQuery || 
+            item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            item.authors?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            item.materialType.toLowerCase().includes(searchQuery.toLowerCase());
+          
+          const matchesMaterialType = filters.materialTypes.length === 0 || 
+            filters.materialTypes.includes(item.materialType);
+          
+          const matchesStatus = filters.statuses.length === 0 || 
+            filters.statuses.includes(item.status);
+          
+          return matchesSearch && matchesMaterialType && matchesStatus;
+        })
+      })).filter(folder => {
+        // Keep folder if it has matching items or if its title matches search
+        const folderMatches = !searchQuery || 
+          folder.title.toLowerCase().includes(searchQuery.toLowerCase());
+        return folder.items.length > 0 || folderMatches;
+      });
+    }
+
+    // Apply sorting to ungrouped items only (folders maintain their order)
+    switch (sortBy) {
+      case 'title-asc':
+        ungroupedItems.sort((a, b) => a.title.localeCompare(b.title));
+        break;
+      case 'title-desc':
+        ungroupedItems.sort((a, b) => b.title.localeCompare(a.title));
+        break;
+      case 'author-asc':
+        ungroupedItems.sort((a, b) => (a.authors || '').localeCompare(b.authors || ''));
+        break;
+      case 'author-desc':
+        ungroupedItems.sort((a, b) => (b.authors || '').localeCompare(a.authors || ''));
+        break;
+      case 'material-type':
+        ungroupedItems.sort((a, b) => a.materialType.localeCompare(b.materialType));
+        break;
+      case 'status':
+        ungroupedItems.sort((a, b) => a.status.localeCompare(b.status));
+        break;
+      case 'position':
+      default:
+        // Keep original order
+        break;
+    }
+
+    // Create updated mixed content with filtered ungrouped items
+    const filteredMixedContent = organizedContent.mixedContent.map(item => {
+      if (item.type === 'folder') {
+        return item;
+      } else {
+        // Check if this ungrouped item passed the filters
+        const isIncluded = ungroupedItems.some(filteredItem => filteredItem.id === item.item?.id);
+        return isIncluded ? item : null;
+      }
+    }).filter((item): item is NonNullable<typeof item> => item !== null);
+
+    return { folders, ungroupedItems, mixedContent: filteredMixedContent };
+  }, [organizedContent, searchQuery, filters, sortBy, reserve]);
+  
+  // Check if filters or sorting are applied (disable drag when true)
+  const hasActiveFiltersOrSort = sortBy !== 'position' || 
+                                 filters.materialTypes.length > 0 || 
+                                 filters.statuses.length > 0 || 
+                                 !!searchQuery;
+
+  // Calculate total items for display
+  const totalDisplayedItems = filteredAndSortedContent.folders.reduce((acc, folder) => acc + folder.items.length, 0) + filteredAndSortedContent.ungroupedItems.length;
+  
+  if (!reserve) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-2">Course Reserve Not Found</h1>
+          <Button onClick={() => navigate("/")}>Return to Dashboard</Button>
+        </div>
+      </div>
+    );
+  }
+
+  const handleAddItem = () => {
+    setEditingItem(undefined);
+    setModalOpen(true);
+  };
+
+  const handleEditItem = (courseItem: { id: string; materialType: string; title: string; authors?: string; url?: string; notes?: string; isbn?: string; doi?: string; pages?: string; edition?: string; publisher?: string; publicationYear?: string; journalTitle?: string; volume?: string; issue?: string }) => {
+    // Map store material types to ItemModal material types
+    const materialTypeMapping: Record<string, string> = {
+      'book': 'Book',
+      'article': 'Article', 
+      'chapter': 'Book Chapter',
+      'video': 'Video',
+      'website': 'Website', 
+      'other': 'Other'
+    };
+
+    // Transform CourseItem back to ItemData format for editing
+    const itemData = {
+      id: courseItem.id,
+      materialType: materialTypeMapping[courseItem.materialType] || courseItem.materialType,
+      title: courseItem.title,
+      author: courseItem.authors || '',
+      citation: '', // This field doesn't exist in CourseItem
+      sourceLink: courseItem.url || '',
+      requestType: '', // This field doesn't exist in CourseItem
+      publicNote: courseItem.notes || '',
+      isbn: courseItem.isbn,
+      doi: courseItem.doi,
+      pages: courseItem.pages,
+      edition: courseItem.edition,
+      publisher: courseItem.publisher,
+      publicationYear: courseItem.publicationYear,
+      journal: courseItem.journalTitle,
+      volume: courseItem.volume,
+      issue: courseItem.issue,
+    };
+    setEditingItem(itemData);
+    setModalOpen(true);
+  };
+
+  const handleSaveItem = (itemData: ItemData) => {
+    // Map ItemModal material types back to store material types
+    const materialTypeMapping: Record<string, 'book' | 'article' | 'chapter' | 'video' | 'website' | 'other'> = {
+      'Book': 'book',
+      'Article': 'article',
+      'Journal Article': 'article',
+      'Book Chapter': 'chapter',
+      'Video': 'video',
+      'Website': 'website',
+      'Other': 'other'
+    };
+
+    // Transform ItemData to CourseItem format
+    const courseItemData = {
+      title: itemData.title,
+      authors: itemData.author,
+      isbn: itemData.isbn,
+      publisher: itemData.publisher,
+      publicationYear: itemData.publicationYear,
+      edition: itemData.edition,
+      pages: itemData.pages,
+      journalTitle: itemData.journal,
+      volume: itemData.volume,
+      issue: itemData.issue,
+      doi: itemData.doi,
+      url: itemData.sourceLink,
+      materialType: materialTypeMapping[itemData.materialType] || 'other',
+      status: 'draft' as const,
+      notes: itemData.publicNote,
+    };
+
+    if (editingItem) {
+      updateItem(id!, editingItem.id, courseItemData);
+    } else {
+      addItem(id!, courseItemData);
+    }
+    setModalOpen(false);
+    setEditingItem(undefined);
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) return;
+
+    // Only allow drag and drop when using the original order (no sorting/filtering that changes order)
+    const isOriginalOrder = sortBy === 'position' && 
+                           filters.materialTypes.length === 0 && 
+                           filters.statuses.length === 0 && 
+                           !searchQuery;
+
+    if (!isOriginalOrder) {
+      toast.error("Drag and drop is disabled when filters or sorting are applied. Clear filters to reorder items.");
+      return;
+    }
+
+    const activeData = active.data.current;
+    const overData = over.data.current;
+
+    // Handle dropping an item into a folder
+    if (activeData?.type === 'Item' && over.id.toString().startsWith('folder-')) {
+      const folderId = over.id.toString().replace('folder-', '');
+      const itemId = active.id.toString();
+      
+      // Add item to folder
+      addItemToFolder(id!, folderId, itemId);
+      toast.success(`Item moved to folder`);
+      return;
+    }
+
+    // Handle folder drag and drop (simplified approach)
+    if (activeData?.type === 'Folder') {
+      // For now, let's disable folder drag and drop to focus on arrow buttons
+      toast.info("Use the arrow buttons to reorder folders");
+      return;
+    }
+
+    // Handle reordering items (existing logic)
+    if (activeData?.type === 'Item' && overData?.type === 'Item') {
+      const oldIndex = reserve.items.findIndex(item => item.id === active.id);
+      const newIndex = reserve.items.findIndex(item => item.id === over.id);
+      
+      if (oldIndex !== -1 && newIndex !== -1) {
+        const reorderedItems = arrayMove(reserve.items, oldIndex, newIndex);
+        reorderItems(id!, reorderedItems.map(item => item.id));
+        toast.success("Items reordered successfully");
+      }
+    }
+  };
+
+  const handleMoveUp = (itemId: string) => {
+    // Only allow manual reordering when using the original order
+    const isOriginalOrder = sortBy === 'position' && 
+                           filters.materialTypes.length === 0 && 
+                           filters.statuses.length === 0 && 
+                           !searchQuery;
+
+    if (!isOriginalOrder) {
+      toast.error("Manual reordering is disabled when filters or sorting are applied. Clear filters to reorder items.");
+      return;
+    }
+
+    const currentIndex = reserve.items.findIndex(item => item.id === itemId);
+    if (currentIndex > 0) {
+      moveItemToPosition(id!, itemId, currentIndex - 1);
+      toast.success("Item moved up");
+    }
+  };
+
+  const handleMoveDown = (itemId: string) => {
+    // Only allow manual reordering when using the original order
+    const isOriginalOrder = sortBy === 'position' && 
+                           filters.materialTypes.length === 0 && 
+                           filters.statuses.length === 0 && 
+                           !searchQuery;
+
+    if (!isOriginalOrder) {
+      toast.error("Manual reordering is disabled when filters or sorting are applied. Clear filters to reorder items.");
+      return;
+    }
+
+    const currentIndex = reserve.items.findIndex(item => item.id === itemId);
+    if (currentIndex < reserve.items.length - 1) {
+      moveItemToPosition(id!, itemId, currentIndex + 1);
+      toast.success("Item moved down");
+    }
+  };
+
+  const handleDeleteItem = (itemId: string) => {
+    deleteItem(id!, itemId);
+    toast.success("Item removed from list");
+  };
+
+  const resetFilters = () => {
+    setFilters({
+      materialTypes: [],
+      statuses: []
+    });
+    setSearchQuery('');
+    setSortBy('position');
+  };
+
+  const handleSubmit = () => {
+    setShowSubmitDialog(true);
+  };
+
+  const confirmSubmit = () => {
+    // Use organizedContent to get folders with their items properly populated
+    const foldersWithItems = organizedContent.folders.map((folder, index) => ({
+      id: folder.id,
+      title: folder.title,
+      description: folder.description,
+      position: folder.position ?? index,
+      isOpen: folder.isOpen,
+      items: folder.items, // These are now properly populated from organizedContent
+    }));
+
+    // Get the actual display order from mixedContent
+    const displayOrder = organizedContent.mixedContent.map((item, index) => ({
+      type: item.type,
+      id: item.type === 'folder' ? item.folder!.id : item.item!.id,
+      displayPosition: index,
+      originalPosition: item.position,
+    }));
+
+    // Prepare submission data
+    const submissionData = {
+      reserveId: reserve.id,
+      courseInfo: {
+        courseCode: reserve.courseCode,
+        courseTitle: reserve.courseTitle,
+        section: reserve.section,
+        instructors: reserve.instructors,
+        term: reserve.term,
+        status: reserve.status,
+        lastUpdated: reserve.lastUpdated,
+      },
+      items: reserve.items, // All items with their folderId references
+      folders: foldersWithItems, // Folders with items populated
+      displayOrder, // The actual order things appear on screen
+      metadata: {
+        totalItems: reserve.items.length,
+        totalFolders: foldersWithItems.length,
+        itemsInFolders: reserve.items.filter(item => item.folderId).length,
+        ungroupedItems: reserve.items.filter(item => !item.folderId).length,
+        submittedAt: new Date().toISOString(),
+        emailConfirmation,
+      }
+    };
+
+    // Log the submission data structure
+    console.group('📤 Course Reserve Submission Data');
+    console.log('Full Payload:', submissionData);
+    console.log('Course:', submissionData.courseInfo);
+    console.log('Items Count:', submissionData.items.length);
+    console.log('Folders Count:', submissionData.folders.length);
+    console.log('Items:', submissionData.items);
+    console.log('Folders with populated items:', submissionData.folders);
+    console.log('Display Order:', submissionData.displayOrder);
+    console.log('Metadata:', submissionData.metadata);
+    console.groupEnd();
+
+    // Here's where you would make the API call:
+    // fetch('/api/course-reserves/submit', {
+    //   method: 'POST',
+    //   headers: {
+    //     'Content-Type': 'application/json',
+    //   },
+    //   body: JSON.stringify(submissionData),
+    // })
+    // .then(response => response.json())
+    // .then(data => {
+    //   toast.success("Submitted. Library staff will begin review.");
+    //   navigate(`/submission/${id}`);
+    // })
+    // .catch(error => {
+    //   toast.error("Failed to submit. Please try again.");
+    //   console.error('Submission error:', error);
+    // });
+
+    toast.success("Submitted. Library staff will begin review.");
+    navigate(`/submission/${id}`);
+  };
+
+  const handleSaveDraft = () => {
+    toast.success("Draft saved");
+  };
+
+  const handleEditCourse = () => {
+    setCourseModalOpen(true);
+  };
+
+  const handleSaveCourse = (courseData: CourseData) => {
+    updateReserve(id!, {
+      courseCode: courseData.courseCode,
+      courseTitle: courseData.courseTitle,
+      section: courseData.section,
+      instructors: courseData.instructors,
+      term: courseData.term,
+    });
+    setCourseModalOpen(false);
+    toast.success("Course details updated");
+  };
+
+  // Folder handlers
+  const handleCreateFolder = () => {
+    const title = prompt("Enter folder name:");
+    if (title?.trim()) {
+      createFolder(id!, title.trim());
+      toast.success("Folder created");
+    }
+  };
+
+  const handleUpdateFolder = (folderId: string, updates: Partial<Pick<import('../store/courseReservesStore').CourseFolder, 'title' | 'description' | 'isOpen'>>) => {
+    updateFolder(id!, folderId, updates);
+  };
+
+  const handleDeleteFolder = (folderId: string) => {
+    deleteFolder(id!, folderId);
+    toast.success("Folder deleted");
+  };
+
+  const handleToggleFolder = (folderId: string) => {
+    toggleFolder(id!, folderId);
+  };
+
+  const handleAddItemToFolder = (folderId: string, itemId: string) => {
+    addItemToFolder(id!, folderId, itemId);
+    toast.success("Item added to folder");
+  };
+
+  const handleRemoveItemFromFolder = (itemId: string) => {
+    removeItemFromFolder(id!, itemId);
+    toast.success("Item removed from folder");
+  };
+
+  const handleClearAll = () => {
+    if (!reserve || reserve.items.length === 0) return;
+    
+    const itemCount = reserve.items.length;
+    const confirmed = window.confirm(
+      `Are you sure you want to remove all ${itemCount} item${itemCount !== 1 ? 's' : ''}? This action cannot be undone.`
+    );
+    
+    if (confirmed) {
+      // Delete all items
+      reserve.items.forEach(item => {
+        deleteItem(id!, item.id);
+      });
+      toast.success(`Removed all ${itemCount} item${itemCount !== 1 ? 's' : ''}`);
+    }
+  };
+
+  const handleOpenCloneDialog = async (mode: 'exact' | 'all' = 'exact', directToResources: boolean = false) => {
+    if (!reserve || !user?.full_name) return;
+    
+    setViewMode(mode);
+    setCloneDialogOpen(true);
+    
+    // If directToResources is true and mode is exact, fetch courses then immediately load all their resources
+    if (directToResources && mode === 'exact') {
+      setDialogView('resources');
+    } else {
+      setDialogView('courses');
+    }
+    
+    try {
+      const courses = await fetchPreviousCourses(reserve.courseCode, user.full_name, mode);
+      
+      // If direct to resources mode and we found exact matches, fetch all their resources
+      if (directToResources && mode === 'exact') {
+        const exactMatches = courses.filter(c => c.isExactMatch);
+        if (exactMatches.length > 0) {
+          await loadResourcesFromMultipleCourses(exactMatches);
+        }
+      }
+      
+    } catch (error) {
+      console.error('Failed to load previous courses:', error);
+      toast.error('Failed to load previous courses');
+    }
+  };
+
+  const handleCloneFromCourse = async (courseListingId: string) => {
+    if (!reserve) return;
+    
+    setCloningFromCourse(courseListingId);
+    
+    try {
+      const { physicalReserves, electronicResources } = await fetchCourseResources(courseListingId);
+      
+      // Process physical reserves
+      physicalReserves.forEach((reserve) => {
+        const item = reserve.copiedItem;
+        if (item) {
+          const primaryAuthor = item.contributors?.find((c) => c.primary)?.name || 
+                               item.contributors?.[0]?.name || '';
+          const pubInfo = item.publication?.[0];
+          
+          addItem(id!, {
+            title: item.title || 'Untitled Item',
+            authors: primaryAuthor,
+            materialType: 'book',
+            status: 'draft',
+            isbn: '',
+            publisher: pubInfo?.publisher || '',
+            publicationYear: pubInfo?.dateOfPublication || '',
+            notes: `Call Number: ${item.callNumber || 'N/A'} | Barcode: ${item.barcode || 'N/A'}`,
+          });
+        }
+      });
+      
+      // Process electronic resources
+      electronicResources.forEach((resource) => {
+        let materialType: 'article' | 'video' | 'website' | 'other' = 'other';
+        
+        if (resource.url) {
+          if (resource.url.includes('youtube') || resource.url.includes('video')) {
+            materialType = 'video';
+          } else if (resource.url.includes('ebsco') || resource.url.includes('journal')) {
+            materialType = 'article';
+          } else {
+            materialType = 'website';
+          }
+        }
+        
+        addItem(id!, {
+          title: resource.title || 'Untitled Resource',
+          materialType,
+          status: 'draft',
+          url: resource.url || '',
+          notes: [
+            resource.description,
+            resource.external_note,
+            resource.internal_note,
+            resource.folder_name ? `Folder: ${resource.folder_name}` : null
+          ].filter(Boolean).join(' | ') || '',
+        });
+      });
+      
+      const totalCloned = physicalReserves.length + electronicResources.length;
+      
+      if (totalCloned > 0) {
+        toast.success(`Cloned ${totalCloned} materials successfully!`);
+      } else {
+        toast.info('No materials found to copy from this course');
+      }
+      
+      // Close dialog but keep banner visible for multi-course cloning
+      setCloneDialogOpen(false);
+      // Don't hide the banner - let user clone from more courses if they want
+      // They can dismiss it manually with "Start Fresh Instead" button
+      
+    } catch (error) {
+      console.error('Failed to clone course:', error);
+      toast.error('Failed to clone materials');
+    } finally {
+      setCloningFromCourse(null);
+    }
+  };
+
+  // Load resources from multiple courses (for "View History" direct access)
+  const loadResourcesFromMultipleCourses = async (courses: PreviousCourse[]) => {
+    setLoadingPreview(true);
+    setPreviewCourse({ 
+      courseListingId: 'multiple',
+      courseNumber: reserve?.courseCode || '',
+      courseName: `${courses.length} Previous Version${courses.length !== 1 ? 's' : ''}`,
+      term: courses.map(c => c.term).join(', '),
+      instructor: user?.full_name || '',
+      resourceCount: courses.reduce((sum, c) => sum + c.resourceCount, 0),
+      isExactMatch: true
+    } as PreviousCourse);
+    
+    try {
+      const allResources: PreviewResource[] = [];
+      
+      // Fetch resources from each course
+      for (const course of courses) {
+        try {
+          const { physicalReserves, electronicResources } = await fetchCourseResources(course.courseListingId);
+          
+          // Transform physical reserves
+          physicalReserves.forEach((reserve) => {
+            const item = reserve.copiedItem || reserve.item;
+            if (item && item.title) {
+              const primaryAuthor = item.contributors?.find((c) => c.primary)?.name ||
+                                   item.contributors?.[0]?.name || '';
+              const pubInfo = item.publication?.[0];
+              let callNumber = '';
+              if ('callNumber' in item && item.callNumber) {
+                callNumber = item.callNumber;
+              } else if ('effectiveCallNumberComponents' in item && item.effectiveCallNumberComponents?.callNumber) {
+                callNumber = item.effectiveCallNumberComponents.callNumber;
+              }
+              
+              allResources.push({
+                type: 'physical',
+                title: item.title,
+                author: primaryAuthor,
+                materialType: 'book',
+                publicationInfo: pubInfo?.publisher ? 
+                  `${pubInfo.publisher}${pubInfo.dateOfPublication ? `, ${pubInfo.dateOfPublication}` : ''}` : 
+                  undefined,
+                callNumber: callNumber || undefined,
+                notes: `From: ${course.term}`,
+                _originalReserve: reserve,
+              });
+            }
+          });
+          
+          // Transform electronic resources
+          electronicResources.forEach((resource) => {
+            let materialType = 'other';
+            if (resource.url) {
+              if (resource.url.includes('youtube') || resource.url.includes('video')) {
+                materialType = 'video';
+              } else if (resource.url.includes('ebsco') || resource.url.includes('journal') || resource.publication_title) {
+                materialType = 'article';
+              } else {
+                materialType = 'website';
+              }
+            }
+            
+            allResources.push({
+              type: 'electronic',
+              title: resource.title || 'Untitled Resource',
+              author: resource.authors || undefined,
+              materialType,
+              url: resource.url || undefined,
+              publicationInfo: resource.publication_title ? 
+                `${resource.publication_title}${resource.publication_date ? ` (${resource.publication_date})` : ''}` : 
+                undefined,
+              notes: resource.notes ? `${resource.notes} | From: ${course.term}` : `From: ${course.term}`,
+              _originalResource: resource,
+            });
+          });
+          
+        } catch (error) {
+          console.error(`Failed to process course ${course.courseNumber}:`, error);
+        }
+      }
+      
+      setPreviewResources(allResources);
+      
+    } catch (error) {
+      console.error('Failed to load resources:', error);
+      toast.error('Failed to load resources from courses');
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
+  const handlePreviewCourse = async (course: PreviousCourse) => {
+    setPreviewCourse(course);
+    setDialogView('resources');
+    setLoadingPreview(true);
+    
+    try {
+      const { physicalReserves, electronicResources } = await fetchCourseResources(course.courseListingId);
+      
+      // Transform to preview format
+      const resources: PreviewResource[] = [];
+      
+      // Process physical reserves
+      physicalReserves.forEach((reserve) => {
+        const item = reserve.copiedItem;
+        if (item) {
+          const primaryAuthor = item.contributors?.find((c) => c.primary)?.name || 
+                               item.contributors?.[0]?.name || '';
+          const pubInfo = item.publication?.[0];
+          
+          resources.push({
+            type: 'physical',
+            title: item.title || 'Untitled Item',
+            author: primaryAuthor,
+            materialType: 'book',
+            publicationInfo: pubInfo?.publisher && pubInfo?.dateOfPublication ? 
+              `${pubInfo.publisher}, ${pubInfo.dateOfPublication}` : 
+              pubInfo?.publisher || undefined,
+            callNumber: item.callNumber || undefined,
+            notes: `Barcode: ${item.barcode || 'N/A'}`,
+            _originalReserve: reserve
+          });
+        }
+      });
+      
+      // Process electronic resources
+      electronicResources.forEach((resource) => {
+        let materialType = 'other';
+        
+        if (resource.url) {
+          if (resource.url.includes('youtube') || resource.url.includes('video')) {
+            materialType = 'video';
+          } else if (resource.url.includes('ebsco') || resource.url.includes('journal')) {
+            materialType = 'article';
+          } else {
+            materialType = 'website';
+          }
+        }
+        
+        resources.push({
+          type: 'electronic',
+          title: resource.title || 'Untitled Resource',
+          materialType,
+          url: resource.url || '',
+          notes: [
+            resource.description,
+            resource.external_note,
+            resource.internal_note,
+            resource.folder_name ? `Folder: ${resource.folder_name}` : null
+          ].filter(Boolean).join(' | ') || '',
+          _originalResource: resource
+        });
+      });
+      
+      setPreviewResources(resources);
+      
+    } catch (error) {
+      console.error('Failed to preview course:', error);
+      setPreviewResources([]);
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
+  const handleAddSingleResource = (resource: PreviewResource) => {
+    if (!reserve) {
+      console.error('No reserve found');
+      toast.error('Error: No course found');
+      return;
+    }
+    
+    if (!id) {
+      console.error('No course ID');
+      toast.error('Error: No course ID');
+      return;
+    }
+    
+    console.log('Adding resource:', resource);
+    
+    try {
+      // Handle resources from loadResourcesFromMultipleCourses (type: 'physical' or 'electronic')
+      if (resource.type === 'physical' && resource._originalReserve) {
+        const reserveData = resource._originalReserve;
+        const item = reserveData.copiedItem || reserveData.item;
+        
+        if (!item || !item.title) {
+          console.error('Invalid physical item data:', item);
+          toast.error('Invalid resource data');
+          return;
+        }
+        
+        const primaryAuthor = item.contributors?.find((c) => c.primary)?.name || 
+                             item.contributors?.[0]?.name || '';
+        const pubInfo = item.publication?.[0];
+        
+        // Get call number and barcode from the reserve or item
+        let callNumber = '';
+        if ('callNumber' in item && item.callNumber) {
+          callNumber = item.callNumber;
+        } else if ('effectiveCallNumberComponents' in item && item.effectiveCallNumberComponents?.callNumber) {
+          callNumber = item.effectiveCallNumberComponents.callNumber;
+        }
+        
+        const barcode = reserveData.barcode || ('barcode' in item ? item.barcode : '') || '';
+        
+        const newItem = {
+          title: item.title,
+          authors: primaryAuthor,
+          materialType: 'book' as const,
+          status: 'draft' as const,
+          isbn: '',
+          publisher: pubInfo?.publisher || '',
+          publicationYear: pubInfo?.dateOfPublication || '',
+          notes: resource.notes || `Call Number: ${callNumber || 'N/A'}${barcode ? ` | Barcode: ${barcode}` : ''}`,
+        };
+        
+        console.log('Adding physical item:', newItem);
+        addItem(id, newItem);
+        toast.success(`Added "${resource.title}"`);
+        
+      } else if (resource.type === 'electronic' && resource._originalResource) {
+        let materialType: 'article' | 'video' | 'website' | 'other' = 'other';
+        
+        if (resource.url) {
+          if (resource.url.includes('youtube') || resource.url.includes('video')) {
+            materialType = 'video';
+          } else if (resource.url.includes('ebsco') || resource.url.includes('journal') || resource._originalResource.publication_title) {
+            materialType = 'article';
+          } else {
+            materialType = 'website';
+          }
+        }
+        
+        const newItem = {
+          title: resource.title || 'Untitled Resource',
+          authors: resource.author,
+          materialType,
+          status: 'draft' as const,
+          url: resource.url || '',
+          notes: resource.notes || '',
+        };
+        
+        console.log('Adding electronic item:', newItem);
+        addItem(id, newItem);
+        toast.success(`Added "${resource.title}"`);
+        
+      } 
+      // Handle resources from handlePreviewCourse (type: 'book', 'article', 'video', etc)
+      else if (resource._originalReserve) {
+        // Physical resource from single course preview
+        const reserveData = resource._originalReserve;
+        const item = reserveData.copiedItem || reserveData.item;
+        
+        if (!item || !item.title) {
+          console.error('Invalid physical item data:', item);
+          toast.error('Invalid resource data');
+          return;
+        }
+        
+        const primaryAuthor = item.contributors?.find((c) => c.primary)?.name || 
+                             item.contributors?.[0]?.name || '';
+        const pubInfo = item.publication?.[0];
+        
+        // Get call number and barcode
+        let callNumber = '';
+        if ('callNumber' in item && item.callNumber) {
+          callNumber = item.callNumber;
+        } else if ('effectiveCallNumberComponents' in item && item.effectiveCallNumberComponents?.callNumber) {
+          callNumber = item.effectiveCallNumberComponents.callNumber;
+        }
+        
+        const barcode = reserveData.barcode || ('barcode' in item ? item.barcode : '') || '';
+        
+        const newItem = {
+          title: item.title,
+          authors: primaryAuthor,
+          materialType: 'book' as const,
+          status: 'draft' as const,
+          isbn: '',
+          publisher: pubInfo?.publisher || '',
+          publicationYear: pubInfo?.dateOfPublication || '',
+          notes: resource.notes || `Call Number: ${callNumber || 'N/A'}${barcode ? ` | Barcode: ${barcode}` : ''}`,
+        };
+        
+        console.log('Adding physical item (from preview):', newItem);
+        addItem(id, newItem);
+        toast.success(`Added "${resource.title}"`);
+        
+      } else if (resource._originalResource) {
+        // Electronic resource from single course preview
+        let materialType: 'article' | 'video' | 'website' | 'other' = 'other';
+        const originalResource = resource._originalResource;
+        
+        if (originalResource.url || resource.url) {
+          const url = originalResource.url || resource.url || '';
+          if (url.includes('youtube') || url.includes('video')) {
+            materialType = 'video';
+          } else if (url.includes('ebsco') || url.includes('journal') || originalResource.publication_title) {
+            materialType = 'article';
+          } else {
+            materialType = 'website';
+          }
+        }
+        
+        const newItem = {
+          title: resource.title || 'Untitled Resource',
+          authors: resource.author,
+          materialType,
+          status: 'draft' as const,
+          url: originalResource.url || resource.url || '',
+          notes: resource.notes || '',
+        };
+        
+        console.log('Adding electronic item (from preview):', newItem);
+        addItem(id, newItem);
+        toast.success(`Added "${resource.title}"`);
+        
+      } else {
+        console.error('Invalid resource - no original data:', resource);
+        toast.error('Invalid resource: missing original data');
+        return;
+      }
+      
+    } catch (error) {
+      console.error('Failed to add resource:', error, resource);
+      toast.error(`Failed to add resource: ${(error as Error).message || 'Unknown error'}`);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <header className="border-b bg-card sticky top-0 z-10">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-4">
+              <Button variant="ghost" size="icon" onClick={() => navigate("/")}>
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">My Course Reserves /</span>
+                  <span className="font-semibold">{reserve.courseCode} ({reserve.term})</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <StatusBadge status="draft" />
+              <Button variant="ghost" onClick={handleSaveDraft}>
+                Save Draft
+              </Button>
+              <Button onClick={handleSubmit}>Submit to Library</Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid lg:grid-cols-[350px_1fr] gap-6">
+          {/* Left: Course Panel */}
+          <div className="space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold">Course Details</h3>
+                  <Button variant="ghost" size="sm" onClick={handleEditCourse}>
+                    <Edit2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div>
+                  <p className="text-sm text-muted-foreground">Course Code</p>
+                  <p className="font-medium">{reserve.courseCode}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Course Title</p>
+                  <p className="font-medium">{reserve.courseTitle}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Section</p>
+                  <p className="font-medium">{reserve.section}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Term</p>
+                  <Badge variant="secondary">{reserve.term}</Badge>
+                </div>
+
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Right: Items List */}
+          <div className="space-y-6">
+            {/* Clone Suggestion Banner - Show when course is building up */}
+            {showCloneSuggestion && !checkingForPreviousCourses && (
+              <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+                <CardContent className="pt-6">
+                  <div className="flex items-start gap-4">
+                    <div className="flex-shrink-0">
+                      <div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
+                        <Copy className="h-6 w-6 text-blue-600" />
+                      </div>
+                    </div>
+                    <div className="flex-1 space-y-3">
+                      <div>
+                        <h3 className="font-semibold text-blue-900 text-lg mb-1">
+                          {hasExactMatchCourses ? 'Copy Materials from Previous Terms' : 'Copy from Your Other Courses'}
+                        </h3>
+                        <p className="text-blue-700 text-sm">
+                          {reserve.items.length > 0 ? (
+                            <>
+                              You have <strong>{reserve.items.length} material{reserve.items.length !== 1 ? 's' : ''}</strong> so far. 
+                              You can continue adding from {hasExactMatchCourses ? 'previous versions of this course' : 'your other courses'}.
+                            </>
+                          ) : hasExactMatchCourses ? (
+                            <>
+                              We found previous versions of <strong>{reserve.courseCode}</strong> that you taught. 
+                              Copy materials from one or more terms to build your list.
+                            </>
+                          ) : (
+                            <>
+                              We didn't find previous versions of <strong>{reserve.courseCode}</strong>, but you can 
+                              search all your courses and copy relevant materials.
+                            </>
+                          )}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {hasExactMatchCourses ? (
+                          <>
+                            <Button 
+                              onClick={() => handleOpenCloneDialog('exact', true)}
+                              className="bg-blue-600 hover:bg-blue-700"
+                            >
+                              <Copy className="mr-2 h-4 w-4" />
+                              View {reserve.courseCode} Resources
+                            </Button>
+                            <Button 
+                              onClick={() => handleOpenCloneDialog('all', false)}
+                              variant="outline"
+                              className="border-blue-600 text-blue-600 hover:bg-blue-50"
+                            >
+                              <FileText className="mr-2 h-4 w-4" />
+                              Browse All My Courses
+                            </Button>
+                          </>
+                        ) : (
+                          <Button 
+                            onClick={() => handleOpenCloneDialog('all', false)}
+                            className="bg-blue-600 hover:bg-blue-700"
+                          >
+                            <FileText className="mr-2 h-4 w-4" />
+                            Browse All My Courses
+                          </Button>
+                        )}
+                        <Button 
+                          variant="outline" 
+                          onClick={() => setShowCloneSuggestion(false)}
+                          className="border-blue-300 hover:bg-blue-100"
+                        >
+                          {reserve.items.length > 0 ? 'Dismiss' : 'Start Fresh Instead'}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-blue-600">
+                        💡 Tip: You can copy from multiple courses! Add materials from different terms or related courses, then edit as needed.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* Instructions - Collapsible */}
+            <Card className="bg-blue-50 border-blue-200">
+              <CardContent className="pt-4 pb-4">
+                <button
+                  onClick={() => setShowInstructions(!showInstructions)}
+                  className="w-full flex items-center justify-between text-blue-900 hover:text-blue-700 transition-colors"
+                >
+                  <h3 className="font-semibold flex items-center gap-2">
+                    <BookOpen className="h-4 w-4" />
+                    Managing Your Course Materials - Tips & Shortcuts
+                  </h3>
+                  {showInstructions ? (
+                    <ChevronUp className="h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" />
+                  )}
+                </button>
+                
+                {showInstructions && (
+                  <div className="grid md:grid-cols-2 gap-4 text-sm text-blue-800 mt-4 pt-4 border-t border-blue-200">
+                    <div>
+                      <h4 className="font-medium mb-2">✨ Ordering & Organization</h4>
+                      <ul className="space-y-1 text-blue-700">
+                        <li>• <strong>Drag & drop</strong> to reorder materials</li>
+                        <li>• Use <strong>arrow buttons</strong> for precise positioning</li>
+                        <li>• <strong>Position numbers</strong> show the final order</li>
+                        <li>• <strong>Sort options</strong> help organize large lists</li>
+                      </ul>
+                    </div>
+                    <div>
+                      <h4 className="font-medium mb-2">🔍 Filtering & Search</h4>
+                      <ul className="space-y-1 text-blue-700">
+                        <li>• <strong>Search</strong> by title, author, or type</li>
+                        <li>• <strong>Filter</strong> by material type, status, or priority</li>
+                        <li>• <strong>Custom order</strong> preserves your arrangement</li>
+                        <li>• <strong>Clear filters</strong> to see all materials</li>
+                      </ul>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Sorting and Filtering Toolbar */}
+            <ItemSortingToolbar
+              totalItems={reserve.items.length}
+              sortBy={sortBy}
+              onSortChange={setSortBy}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              filters={filters}
+              onFiltersChange={setFilters}
+              onResetFilters={resetFilters}
+            />
+
+            {/* Add Item Button */}
+            <div className="flex justify-between items-center gap-2">
+              <div className="flex items-center gap-2">
+                {reserve.items.length > 0 && (
+                  <Button 
+                    variant="outline" 
+                    onClick={handleClearAll}
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Clear All ({reserve.items.length})
+                  </Button>
+                )}
+                {!showCloneSuggestion && (
+                  <Button 
+                    variant="outline"
+                    onClick={() => setShowCloneSuggestion(true)}
+                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                  >
+                    <Copy className="mr-2 h-4 w-4" />
+                    Copy from Previous Courses
+                  </Button>
+                )}
+              </div>
+              <Button onClick={handleAddItem}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Material
+              </Button>
+            </div>
+
+            {totalDisplayedItems === 0 ? (
+              <Card>
+                <CardContent className="py-16 text-center">
+                  <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                  <div className="space-y-2">
+                    {reserve.items.length === 0 && reserve.folders.length === 0 ? (
+                      <>
+                        <p className="text-muted-foreground mb-4">
+                          No materials yet. Add your first book, article, or chapter, or create a folder to organize them.
+                        </p>
+                        <div className="flex gap-2 justify-center">
+                          <Button onClick={handleAddItem}>
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add Material
+                          </Button>
+                          <Button variant="outline" onClick={handleCreateFolder}>
+                            <Plus className="mr-2 h-4 w-4" />
+                            Create Folder
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-muted-foreground mb-4">
+                          No materials match your current filters.
+                        </p>
+                        <Button variant="outline" onClick={resetFilters}>
+                          Clear Filters
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                {/* Create Folder Button */}
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">
+                    {filteredAndSortedContent.folders.length} folders, {filteredAndSortedContent.ungroupedItems.length} ungrouped items
+                  </span>
+                  <Button variant="outline" size="sm" onClick={handleCreateFolder}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create Folder
+                  </Button>
+                </div>
+
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleDragEnd}
+                  modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                >
+                  <SortableContext
+                    items={filteredAndSortedContent.mixedContent.map(item => item.type === 'folder' ? item.folder!.id : item.item!.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    <div className="space-y-3">
+                      {/* Render Mixed Content (Folders and Items in order) */}
+                      {filteredAndSortedContent.mixedContent.map((contentItem, index) => {
+                        if (contentItem.type === 'folder' && contentItem.folder) {
+                          return (
+                            <SortableFolder
+                              key={contentItem.folder.id}
+                              folder={contentItem.folder}
+                              index={index}
+                              totalFolders={filteredAndSortedContent.folders.length}
+                              onEditItem={handleEditItem}
+                              onDeleteItem={handleDeleteItem}
+                              onUpdateFolder={handleUpdateFolder}
+                              onDeleteFolder={handleDeleteFolder}
+                              onToggleFolder={handleToggleFolder}
+                              onRemoveItemFromFolder={handleRemoveItemFromFolder}
+                              onMoveItemInFolder={(folderId, itemId, direction) => moveItemInFolder(id!, folderId, itemId, direction)}
+                              onMoveFolderUp={index > 0 ? () => moveFolderPosition(id!, contentItem.folder!.id, 'up') : undefined}
+                              onMoveFolderDown={index < filteredAndSortedContent.mixedContent.length - 1 ? () => moveFolderPosition(id!, contentItem.folder!.id, 'down') : undefined}
+                              isDragDisabled={hasActiveFiltersOrSort}
+                            />
+                          );
+                        } else if (contentItem.type === 'item' && contentItem.item) {
+                          return (
+                            <SortableItem
+                              key={contentItem.item.id}
+                              item={contentItem.item}
+                              index={index}
+                              totalItems={totalDisplayedItems}
+                              onEdit={handleEditItem}
+                              onMoveUp={() => handleMoveUp(contentItem.item!.id)}
+                              onMoveDown={() => handleMoveDown(contentItem.item!.id)}
+                              onDelete={handleDeleteItem}
+                              isDragDisabled={hasActiveFiltersOrSort}
+                              availableFolders={organizedContent.folders}
+                              onAddToFolder={(itemId, folderId) => addItemToFolder(id!, folderId, itemId)}
+                              onRemoveFromFolder={(itemId) => removeItemFromFolder(id!, itemId)}
+                            />
+                          );
+                        }
+                        return null;
+                      })}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+              </div>
+            )}
+          </div>
+        </div>
+      </main>
+
+      {/* Item Modal */}
+      <ItemModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        onSave={handleSaveItem}
+        initialData={editingItem}
+      />
+
+      {/* Submit Dialog */}
+      <AlertDialog open={showSubmitDialog} onOpenChange={setShowSubmitDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Submit to Library?</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-4">
+              <p>
+                You are submitting {reserve.items.length} items for {reserve.courseCode} · {reserve.term}. You won't be
+                able to edit items after submission, but you can add notes.
+              </p>
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="email"
+                  checked={emailConfirmation}
+                  onCheckedChange={(checked) => setEmailConfirmation(checked as boolean)}
+                />
+                <label
+                  htmlFor="email"
+                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                >
+                  Email me a confirmation
+                </label>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmSubmit}>Submit</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Course Edit Modal */}
+      <CourseModal
+        open={courseModalOpen}
+        onOpenChange={setCourseModalOpen}
+        onSave={handleSaveCourse}
+        initialData={{
+          courseCode: reserve.courseCode,
+          courseTitle: reserve.courseTitle,
+          section: reserve.section,
+          instructors: reserve.instructors,
+          term: reserve.term,
+        }}
+        isEditing={true}
+      />
+
+      {/* Clone from Previous Course Dialog */}
+      <Dialog open={cloneDialogOpen} onOpenChange={setCloneDialogOpen}>
+        <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {dialogView === 'resources' ? (
+                <>
+                  <FileText className="h-5 w-5" />
+                  {previewCourse ? `${previewCourse.courseName} - Resources` : 'Resources'}
+                </>
+              ) : (
+                <>
+                  <Copy className="h-5 w-5" />
+                  {reserve.items.length > 0 
+                    ? `Add More Materials (${reserve.items.length} current)` 
+                    : 'Copy Materials from Previous Courses'}
+                </>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              {dialogView === 'resources' ? (
+                previewCourse && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      {previewCourse.courseListingId !== 'multiple' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setDialogView('courses')}
+                          className="text-xs"
+                        >
+                          ← Back to courses
+                        </Button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Badge variant="outline">{previewCourse.term}</Badge>
+                      <span>•</span>
+                      <span className="flex items-center gap-1">
+                        <User className="h-3 w-3" />
+                        {previewCourse.instructor}
+                      </span>
+                    </div>
+                  </div>
+                )
+              ) : (
+                <>
+                  {reserve.items.length > 0 ? (
+                    <>Select additional courses to copy materials from. Materials will be added to your current {reserve.items.length} item{reserve.items.length !== 1 ? 's' : ''}.</>
+                  ) : (
+                    <>Select a course to copy materials from. Exact matches for {reserve.courseCode} are shown first.</>
+                  )}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <ScrollArea className="flex-1 overflow-y-auto px-1">
+            {dialogView === 'resources' ? (
+              /* Resource View */
+              loadingPreview ? (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
+                  <p>Loading resources...</p>
+                </div>
+              ) : previewResources.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                  <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <h3 className="text-lg font-semibold mb-2">No Resources Found</h3>
+                  <p>This course doesn't have any materials.</p>
+                </div>
+              ) : (
+                <div className="space-y-3 pb-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4 sticky top-0 z-10">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-blue-700">
+                        <strong>{previewResources.length}</strong> total resources 
+                        <span className="ml-2">
+                          ({previewResources.filter(r => r.type === 'electronic').length} electronic, {previewResources.filter(r => r.type === 'physical').length} physical)
+                        </span>
+                      </p>
+                      <Button
+                        onClick={() => {
+                          // Add all resources
+                          previewResources.forEach(resource => handleAddSingleResource(resource));
+                          toast.success(`Added all ${previewResources.length} resources`);
+                        }}
+                        size="sm"
+                      >
+                        <Copy className="h-3 w-3 mr-2" />
+                        Add All Resources
+                      </Button>
+                    </div>
+                  </div>
+
+                  {previewResources.map((resource, index) => (
+                    <Card key={index} className="p-4 hover:shadow-md transition-shadow">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 space-y-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge variant={resource.type === 'electronic' ? 'default' : 'secondary'}>
+                              {resource.type === 'electronic' ? 'Electronic' : 'Physical'}
+                            </Badge>
+                            <Badge variant="outline">{resource.materialType}</Badge>
+                          </div>
+                          
+                          <div>
+                            <h4 className="font-semibold leading-tight">{resource.title}</h4>
+                            {resource.author && (
+                              <p className="text-sm text-muted-foreground mt-1">
+                                by {resource.author}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="text-sm space-y-1">
+                            {resource.type === 'electronic' && resource.url && (
+                              <div className="flex items-center gap-1 text-blue-600">
+                                <ExternalLink className="h-3 w-3" />
+                                <a 
+                                  href={resource.url} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="hover:underline truncate"
+                                >
+                                  View resource
+                                </a>
+                              </div>
+                            )}
+                            
+                            {resource.publicationInfo && (
+                              <div className="text-muted-foreground text-xs">
+                                {resource.publicationInfo}
+                              </div>
+                            )}
+
+                            {resource.callNumber && (
+                              <div className="text-muted-foreground text-xs">
+                                Call Number: {resource.callNumber}
+                              </div>
+                            )}
+
+                            {resource.notes && (
+                              <div className="text-muted-foreground italic text-xs">
+                                {resource.notes}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <Button
+                          onClick={() => handleAddSingleResource(resource)}
+                          size="sm"
+                          className="shrink-0"
+                        >
+                          <Plus className="h-3 w-3 mr-2" />
+                          Add
+                        </Button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )
+            ) : (
+              /* Course List View */
+              loadingPreviousCourses ? (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
+                  <p>Loading your previous courses...</p>
+                </div>
+              ) : previousCourses.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                  <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <h3 className="text-lg font-semibold mb-2">No Previous Courses Found</h3>
+                  <p>We couldn't find any previous courses for {user?.full_name}.</p>
+                </div>
+              ) : (
+              <div className="space-y-2">
+                {/* Info banner about resource counts */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                  <p className="text-sm text-blue-700">
+                    <strong>Note:</strong> Resource counts shown are electronic materials only. 
+                    Physical books will also be copied when available.
+                  </p>
+                </div>
+                
+                {/* Exact Matches Section */}
+                {previousCourses.some(c => c.isExactMatch) && (
+                  <>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+                      <h4 className="font-semibold text-green-900 flex items-center gap-2 mb-1">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Exact Matches ({previousCourses.filter(c => c.isExactMatch).length})
+                      </h4>
+                      <p className="text-sm text-green-700">
+                        These courses have the same course code ({reserve.courseCode})
+                      </p>
+                    </div>
+                    {previousCourses.filter(c => c.isExactMatch).map((course) => (
+                      <Card key={course.courseListingId} className="p-4 hover:shadow-md transition-shadow border-green-200">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold">{course.courseNumber} - {course.courseName}</h4>
+                              <Badge variant="default" className="bg-green-600">Exact Match</Badge>
+                            </div>
+                            <div className="text-sm text-muted-foreground space-y-1">
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline">{course.term}</Badge>
+                                <span>•</span>
+                                <span className="flex items-center gap-1">
+                                  <User className="h-3 w-3" />
+                                  {course.instructor}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-blue-600">
+                                <FileText className="h-3 w-3" />
+                                {course.resourceCount > 0 ? (
+                                  <><strong>{course.resourceCount}</strong> electronic materials</>
+                                ) : (
+                                  <>May have physical materials</>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 ml-4">
+                            <Button
+                              onClick={() => handlePreviewCourse(course)}
+                              variant="outline"
+                              size="sm"
+                            >
+                              <FileText className="h-3 w-3 mr-2" />
+                              Preview
+                            </Button>
+                            <Button
+                              onClick={() => handleCloneFromCourse(course.courseListingId)}
+                              disabled={cloningFromCourse === course.courseListingId}
+                              size="sm"
+                            >
+                              {cloningFromCourse === course.courseListingId ? (
+                                <>
+                                  <div className="animate-spin rounded-full h-3 w-3 border-b border-current mr-2"></div>
+                                  Copying...
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3 w-3 mr-2" />
+                                  {reserve.items.length > 0 ? 'Add All' : 'Copy All'}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </>
+                )}
+
+                {/* Other Courses Section */}
+                {previousCourses.some(c => !c.isExactMatch) && (
+                  <>
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 my-4">
+                      <h4 className="font-semibold text-blue-900 flex items-center gap-2 mb-1">
+                        <ExternalLink className="h-4 w-4" />
+                        Other Courses ({previousCourses.filter(c => !c.isExactMatch).length})
+                      </h4>
+                      <p className="text-sm text-blue-700">
+                        Your other courses that may have relevant materials
+                      </p>
+                    </div>
+                    {previousCourses.filter(c => !c.isExactMatch).map((course) => (
+                      <Card key={course.courseListingId} className="p-4 hover:shadow-md transition-shadow">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold">{course.courseNumber} - {course.courseName}</h4>
+                            </div>
+                            <div className="text-sm text-muted-foreground space-y-1">
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline">{course.term}</Badge>
+                                <span>•</span>
+                                <span className="flex items-center gap-1">
+                                  <User className="h-3 w-3" />
+                                  {course.instructor}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <FileText className="h-3 w-3" />
+                                {course.resourceCount > 0 ? (
+                                  <><strong>{course.resourceCount}</strong> electronic materials</>
+                                ) : (
+                                  <>May have physical materials</>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 ml-4">
+                            <Button
+                              onClick={() => handlePreviewCourse(course)}
+                              variant="outline"
+                              size="sm"
+                            >
+                              <FileText className="h-3 w-3 mr-2" />
+                              Preview
+                            </Button>
+                            <Button
+                              onClick={() => handleCloneFromCourse(course.courseListingId)}
+                              disabled={cloningFromCourse === course.courseListingId}
+                              variant="outline"
+                              size="sm"
+                            >
+                              {cloningFromCourse === course.courseListingId ? (
+                                <>
+                                  <div className="animate-spin rounded-full h-3 w-3 border-b border-current mr-2"></div>
+                                  Copying...
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3 w-3 mr-2" />
+                                  {reserve.items.length > 0 ? 'Add All' : 'Copy All'}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </>
+                )}
+              </div>
+              )
+            )}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
+export default SubmissionEditor;

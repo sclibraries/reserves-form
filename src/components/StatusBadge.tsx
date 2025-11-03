@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 
 export type SubmissionStatus = 
   | "draft" 
+  | "pending"
   | "submitted" 
   | "in-review" 
   | "partial" 
@@ -18,6 +19,10 @@ const statusConfig: Record<SubmissionStatus, { label: string; className: string 
   draft: {
     label: "Draft",
     className: "bg-status-draft/10 text-status-draft border-status-draft/20",
+  },
+  pending: {
+    label: "Pending",
+    className: "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
   },
   submitted: {
     label: "Submitted",

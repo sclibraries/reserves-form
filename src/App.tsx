@@ -6,9 +6,11 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Auth from "./pages/Auth";
 import Index from "./pages/Index";
 import NewSubmission from "./pages/NewSubmission";
-import SubmissionEditor from "./pages/SubmissionEditor";
+import SubmissionEditor from "./pages/SubmissionEditor"
 import SubmissionDetail from "./pages/SubmissionDetail";
 import ClonePrevious from "./pages/ClonePrevious";
+import CloneEditor from "./pages/CloneEditor";
+import CloneMatchingTest from "./pages/CloneMatchingTest";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,7 +28,8 @@ const App = () => (
           <Route path="/submission/:id/edit" element={<SubmissionEditor />} />
           <Route path="/submission/:id" element={<SubmissionDetail />} />
           <Route path="/clone-previous" element={<ClonePrevious />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+          <Route path="/clone-editor" element={<CloneEditor />} />
+          <Route path="/clone-matching-test" element={<CloneMatchingTest />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

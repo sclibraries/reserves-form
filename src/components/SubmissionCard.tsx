@@ -3,6 +3,19 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge, SubmissionStatus } from "./StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
+import { useState } from "react";
+import { Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 export interface Submission {
   id: string;
@@ -19,9 +32,10 @@ export interface Submission {
 
 interface SubmissionCardProps {
   submission: Submission;
+  onDelete?: (id: string) => void;
 }
 
-export const SubmissionCard = ({ submission }: SubmissionCardProps) => {
+export const SubmissionCard = ({ submission, onDelete }: SubmissionCardProps) => {
   const navigate = useNavigate();
 
   const handleOpen = () => {
@@ -78,15 +92,52 @@ export const SubmissionCard = ({ submission }: SubmissionCardProps) => {
           View Status
         </Button>
         {submission.status === "draft" && (
-          <Button 
-            variant="ghost"
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(`/submission/${submission.id}/edit`);
-            }}
-          >
-            Continue Editing
-          </Button>
+          <>
+            <Button 
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/submission/${submission.id}/edit`);
+              }}
+            >
+              Continue Editing
+            </Button>
+            {onDelete && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button 
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete Course Reserve</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to delete "{submission.courseCode} · {submission.courseTitle}"? 
+                      This action cannot be undone and all items will be permanently removed.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel onClick={(e) => e.stopPropagation()}>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(submission.id);
+                      }}
+                    >
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </>
         )}
       </CardFooter>
     </Card>
