@@ -41,6 +41,12 @@ export const transformItemForEditing = (courseItem: {
   journalTitle?: string;
   volume?: string;
   issue?: string;
+  displayStartDate?: string;
+  displayEndDate?: string;
+  hasAttachment?: boolean;
+  attachmentName?: string;
+  attachmentSize?: number;
+  attachmentType?: string;
 }): ItemData & { id: string } => {
   return {
     id: courseItem.id,
@@ -51,6 +57,12 @@ export const transformItemForEditing = (courseItem: {
     sourceLink: courseItem.url || '',
     requestType: '',
     publicNote: courseItem.notes || '',
+    displayStartDate: courseItem.displayStartDate ? new Date(courseItem.displayStartDate) : undefined,
+    displayEndDate: courseItem.displayEndDate ? new Date(courseItem.displayEndDate) : undefined,
+    hasAttachment: courseItem.hasAttachment,
+    attachmentName: courseItem.attachmentName,
+    attachmentSize: courseItem.attachmentSize,
+    attachmentType: courseItem.attachmentType,
     isbn: courseItem.isbn,
     doi: courseItem.doi,
     pages: courseItem.pages,
@@ -83,6 +95,12 @@ export const transformItemForSaving = (itemData: ItemData) => {
     materialType: MATERIAL_TYPE_TO_STORE[itemData.materialType] || 'other',
     status: 'draft' as const,
     notes: itemData.publicNote,
+    displayStartDate: itemData.displayStartDate ? itemData.displayStartDate.toISOString() : undefined,
+    displayEndDate: itemData.displayEndDate ? itemData.displayEndDate.toISOString() : undefined,
+    hasAttachment: !!itemData.hasAttachment,
+    attachmentName: itemData.attachmentName,
+    attachmentSize: itemData.attachmentSize,
+    attachmentType: itemData.attachmentType,
   };
 };
 

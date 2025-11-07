@@ -77,7 +77,7 @@ export const useAuthStore = create<AuthState>()(
         logout: () => {
           console.log('🚪 User logged out');
           
-          // Set a flag to prevent persist middleware from writing
+          // Optional: mark logout in progress for other modules that may read it
           sessionStorage.setItem('logout-in-progress', 'true');
           
           // Step 1: Clear auth state
@@ -93,14 +93,20 @@ export const useAuthStore = create<AuthState>()(
             localStorage.removeItem('accessToken');
             localStorage.removeItem('refreshToken');
             localStorage.removeItem('course-reserves-storage');
-            localStorage.removeItem('auth-storage');
+            localStorage.removeItem('auth-store');
             console.log('🗑️ Cleared all localStorage keys');
           } catch (error) {
             console.error('Failed to clear localStorage:', error);
           }
           
-          // Step 3: Force reload immediately
-          // The sessionStorage flag will be cleared on reload
+          // Step 3: Clear the session flag and reload
+          // Note: sessionStorage persists across reloads in the same tab, so remove it explicitly
+          try {
+            sessionStorage.removeItem('logout-in-progress');
+          } catch (e) {
+            // Non-fatal: session storage may be unavailable in some environments
+            console.debug('Could not clear logout flag from sessionStorage', e);
+          }
           window.location.reload();
         },
 

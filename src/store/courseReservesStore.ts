@@ -71,6 +71,14 @@ export interface CourseItem {
   libraryNotes?: string;
   folderId?: string; // If item belongs to a folder
   displayOrder?: number; // Order position from backend
+  // Optional display window (ISO date strings)
+  displayStartDate?: string;
+  displayEndDate?: string;
+  // Optional attachment metadata (no file contents stored)
+  hasAttachment?: boolean;
+  attachmentName?: string;
+  attachmentSize?: number;
+  attachmentType?: string;
   
   // Physical item metadata (for reuse from previous courses)
   barcode?: string; // Maps to source_barcode
@@ -362,19 +370,21 @@ export const useCourseReservesStore = create<CourseReservesState>()(
               };
             });
 
-            // Update reserves only if data has changed (prevents UI flashing)
+            // Merge backend submissions with any local-only draft reserves (ids starting with 'reserve-')
             set((state) => {
-              const hasChanged = JSON.stringify(state.reserves) !== JSON.stringify(backendReserves);
-              
+              const localDrafts = (state.reserves || []).filter(r => r.id.startsWith('reserve-'));
+              const merged = [...localDrafts, ...backendReserves];
+
+              const hasChanged = JSON.stringify(state.reserves) !== JSON.stringify(merged);
               if (!hasChanged && silent) {
                 // No changes detected during silent polling, keep existing state
                 return state;
               }
-              
+
               return {
-                reserves: backendReserves,
+                reserves: merged,
                 loading: false,
-                error: null
+                error: null,
               };
             });
             
@@ -1295,30 +1305,20 @@ export const useCourseReservesStore = create<CourseReservesState>()(
       }),
       {
         name: 'course-reserves-storage',
-        // Persist all reserves (backend submissions only, no test data)
-        partialize: (state) => {
-          // Don't persist if logout is in progress
-          if (sessionStorage.getItem('logout-in-progress') === 'true') {
-            console.log('⏭️ Skipping persist - logout in progress');
-            return { reserves: [], _initialized: false };
-          }
-          
-          return { 
-            reserves: state.reserves,
-            _initialized: false // Don't persist initialization state
-          };
-        },
+        // Persist all reserves (backend submissions and local drafts)
+        partialize: (state) => ({
+          reserves: state.reserves,
+        }),
         // Simple merge - just use persisted data
         merge: (persistedState, currentState) => {
           const persisted = persistedState as Partial<CourseReservesState>;
           const reserves = persisted?.reserves || [];
-          
           return {
             ...currentState,
             reserves,
-            _initialized: true
+            _initialized: true,
           };
-        }
+        },
       }
     )
   )

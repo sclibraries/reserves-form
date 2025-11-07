@@ -28,8 +28,15 @@ export interface ItemData {
   citation: string;
   sourceLink: string;
   requestType: string;
-  neededBy?: Date;
+  // Optional display window for when the item should be visible to students
+  displayStartDate?: Date;
+  displayEndDate?: Date;
   publicNote: string;
+  // Optional attachment metadata (no file contents stored)
+  hasAttachment?: boolean;
+  attachmentName?: string;
+  attachmentSize?: number;
+  attachmentType?: string;
   // Material-specific fields
   isbn?: string;
   doi?: string;
@@ -57,7 +64,13 @@ export const ItemModal = ({ open, onOpenChange, onSave, initialData }: ItemModal
     citation: "",
     sourceLink: "",
     requestType: "link-electronic", // Default to most common
+    displayStartDate: undefined,
+    displayEndDate: undefined,
     publicNote: "",
+    hasAttachment: false,
+    attachmentName: undefined,
+    attachmentSize: undefined,
+    attachmentType: undefined,
     isbn: "",
     doi: "",
     pages: "",
@@ -80,7 +93,12 @@ export const ItemModal = ({ open, onOpenChange, onSave, initialData }: ItemModal
         sourceLink: initialData.sourceLink || "",
         requestType: initialData.requestType || "link-electronic",
         publicNote: initialData.publicNote || "",
-        neededBy: initialData.neededBy,
+        displayStartDate: initialData.displayStartDate,
+        displayEndDate: initialData.displayEndDate,
+        hasAttachment: initialData.hasAttachment || false,
+        attachmentName: initialData.attachmentName,
+        attachmentSize: initialData.attachmentSize,
+        attachmentType: initialData.attachmentType,
         isbn: initialData.isbn || "",
         doi: initialData.doi || "",
         pages: initialData.pages || "",
@@ -99,7 +117,13 @@ export const ItemModal = ({ open, onOpenChange, onSave, initialData }: ItemModal
         citation: "",
         sourceLink: "",
         requestType: "link-electronic",
+        displayStartDate: undefined,
+        displayEndDate: undefined,
         publicNote: "",
+        hasAttachment: false,
+        attachmentName: undefined,
+        attachmentSize: undefined,
+        attachmentType: undefined,
         isbn: "",
         doi: "",
         pages: "",
@@ -356,29 +380,61 @@ export const ItemModal = ({ open, onOpenChange, onSave, initialData }: ItemModal
               </div>
 
               <div className="space-y-2">
-                <Label>Needed By Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className={cn(
-                        "w-full justify-start text-left font-normal",
-                        !formData.neededBy && "text-muted-foreground"
-                      )}
-                    >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {formData.neededBy ? format(formData.neededBy, "PPP") : "Pick a date"}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={formData.neededBy}
-                      onSelect={(date) => setFormData({ ...formData, neededBy: date })}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                <Label>Display Dates (optional)</Label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="displayStart">Display from</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          id="displayStart"
+                          variant="outline"
+                          className={cn(
+                            "w-full justify-start text-left font-normal",
+                            !formData.displayStartDate && "text-muted-foreground"
+                          )}
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formData.displayStartDate ? format(formData.displayStartDate, "PPP") : "Select start date"}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={formData.displayStartDate}
+                          onSelect={(date) => setFormData({ ...formData, displayStartDate: date || undefined })}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div>
+                    <Label htmlFor="displayEnd">Expires on</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          id="displayEnd"
+                          variant="outline"
+                          className={cn(
+                            "w-full justify-start text-left font-normal",
+                            !formData.displayEndDate && "text-muted-foreground"
+                          )}
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formData.displayEndDate ? format(formData.displayEndDate, "PPP") : "Select end date"}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={formData.displayEndDate}
+                          onSelect={(date) => setFormData({ ...formData, displayEndDate: date || undefined })}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -396,14 +452,77 @@ export const ItemModal = ({ open, onOpenChange, onSave, initialData }: ItemModal
               </div>
 
               <div className="space-y-2">
-                <Label>File Upload (Optional)</Label>
-                <div className="border-2 border-dashed rounded-lg p-4 text-center hover:border-primary/50 transition-colors cursor-pointer">
+                <Label htmlFor="fileUpload">File Upload (Optional)</Label>
+                <input
+                  id="fileUpload"
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.gif,.txt,.rtf"
+                  onChange={(e) => {
+                    const file = e.target.files && e.target.files[0];
+                    if (!file) {
+                      setFormData((prev) => ({
+                        ...prev,
+                        hasAttachment: false,
+                        attachmentName: undefined,
+                        attachmentSize: undefined,
+                        attachmentType: undefined,
+                      }));
+                      return;
+                    }
+                    const maxBytes = 10 * 1024 * 1024; // 10MB
+                    if (file.size > maxBytes) {
+                      toast.error("File is larger than 10MB");
+                      e.currentTarget.value = "";
+                      return;
+                    }
+                    setFormData((prev) => ({
+                      ...prev,
+                      hasAttachment: true,
+                      attachmentName: file.name,
+                      attachmentSize: file.size,
+                      attachmentType: file.type,
+                    }));
+                  }}
+                />
+                <label
+                  htmlFor="fileUpload"
+                  className="border-2 border-dashed rounded-lg p-4 text-center hover:border-primary/50 transition-colors cursor-pointer block"
+                >
                   <Upload className="h-6 w-6 mx-auto mb-2 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">
-                    Upload syllabus excerpt or citation file
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">PDF, DOC, or image • Max 10MB</p>
-                </div>
+                  {!formData.hasAttachment ? (
+                    <>
+                      <p className="text-sm text-muted-foreground">
+                        Upload syllabus excerpt or citation file
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">PDF, DOC, or image • Max 10MB</p>
+                    </>
+                  ) : (
+                    <div className="text-sm">
+                      <p className="font-medium">{formData.attachmentName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {(formData.attachmentType || 'file')} · {formData.attachmentSize ? `${(formData.attachmentSize/1024/1024).toFixed(2)} MB` : ''}
+                      </p>
+                    </div>
+                  )}
+                </label>
+                {formData.hasAttachment && (
+                  <div className="flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setFormData((prev) => ({
+                        ...prev,
+                        hasAttachment: false,
+                        attachmentName: undefined,
+                        attachmentSize: undefined,
+                        attachmentType: undefined,
+                      }))}
+                    >
+                      Remove file
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </div>

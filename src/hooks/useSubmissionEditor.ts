@@ -18,6 +18,7 @@ export const useSubmissionEditor = () => {
   // Store hooks
   const {
     getReserveById,
+    fetchSubmissionDetails,
     addItem,
     updateItem,
     deleteItem,
@@ -36,6 +37,18 @@ export const useSubmissionEditor = () => {
   
   const reserve = getReserveById(id!);
   const { user } = useAuthStore();
+
+  // On direct navigation/refresh, try to fetch the submission from backend if missing in store
+  useEffect(() => {
+    if (!id) return;
+    if (reserve) return; // already loaded (from persisted store or prior fetch)
+    // Only attempt backend fetch for non-local IDs
+    if (!String(id).startsWith('reserve-')) {
+      fetchSubmissionDetails(id).catch((e) => {
+        console.debug('No backend submission found for id', id, e);
+      });
+    }
+  }, [id, reserve, fetchSubmissionDetails]);
   
   // Modal states
   const [modalOpen, setModalOpen] = useState(false);
